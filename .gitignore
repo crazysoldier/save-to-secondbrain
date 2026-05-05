@@ -1,0 +1,7 @@
+.env
+.venv/
+__pycache__/
+*.pyc
+browser_profile/
+session_cookies.json
+bot.log
