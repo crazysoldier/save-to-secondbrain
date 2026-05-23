@@ -101,6 +101,23 @@ def build_markdown(content: FetchedContent, tags: List[str]) -> str:
         if content.extra.get("created_at"):
             lines.append(f"*Posted: {content.extra['created_at']}*")
             lines.append("")
+    elif content.content_type == "pdf":
+        # pymupdf4llm already outputs markdown — strip duplicate title if present
+        body = content.text
+        if body:
+            body_lines = body.split("\n")
+            # Drop leading blank lines
+            while body_lines and not body_lines[0].strip():
+                body_lines.pop(0)
+            # Drop first line if it matches the title heading
+            if body_lines:
+                first_clean = body_lines[0].lstrip("#").strip()
+                if first_clean.lower() == content.title.lower():
+                    body_lines.pop(0)
+                    while body_lines and not body_lines[0].strip():
+                        body_lines.pop(0)
+            lines.append("\n".join(body_lines))
+            lines.append("")
     else:
         # Article: plain text body
         if content.text:

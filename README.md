@@ -1,14 +1,15 @@
 # Save to Second Brain
 
-A Telegram bot that saves articles, websites, tweets, and X (Twitter) posts as clean Obsidian-compatible markdown files.
+A Telegram bot that saves articles, websites, tweets, X posts, and PDFs as clean Obsidian-compatible markdown files.
 
-Send any URL to the bot → it extracts the content → saves a `.md` file directly into your vault.
+Send any URL or drop a PDF into the chat → content gets extracted → saved as a `.md` file in your vault.
 
 ## Features
 
 - **Articles & websites** — extracts main content via trafilatura, strips ads and navigation
 - **Tweets** — fetches full text, author, media, and timestamp via [FxEmbed](https://github.com/FxEmbed/FxEmbed)
 - **X Articles** (long-form native X posts) — fetches full article content using your real browser session (login-gated content included)
+- **PDFs** — drop a PDF file into the chat or send a PDF link. Full text extracted with headings, tables, bold/italic preserved via [pymupdf4llm](https://github.com/pymupdf/PyMuPDF4LLM)
 - **Obsidian frontmatter** — title, url, date, author, source, type, tags
 - **Cover image** placed at the top of the note before the heading
 - **Heading detection** for X Articles — short standalone lines become `##` headings
@@ -182,7 +183,7 @@ Full article text with ## section headings...
 | File | Purpose |
 |---|---|
 | `bot.py` | Telegram bot, message handling |
-| `fetcher.py` | URL detection, article/tweet fetching |
+| `fetcher.py` | URL detection, article/tweet/PDF fetching |
 | `browser.py` | Playwright-based X Article fetcher |
 | `formatter.py` | Builds Obsidian markdown from fetched content |
 | `login.py` | Extracts X.com cookies from your real browser |

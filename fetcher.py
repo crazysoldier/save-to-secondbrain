@@ -1,13 +1,15 @@
 """
-Content fetching for articles, websites, and X/Twitter posts.
+Content fetching for articles, websites, X/Twitter posts, and PDFs.
 """
 
 from __future__ import annotations
 
 import re
+import tempfile
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Dict, List
-from urllib.parse import urlparse
+from urllib.parse import urlparse, unquote
 
 import requests
 import trafilatura
@@ -31,7 +33,7 @@ class FetchedContent:
     author: str = ""
     site_name: str = ""
     description: str = ""
-    content_type: str = "article"  # "article" | "tweet"
+    content_type: str = "article"  # "article" | "tweet" | "pdf"
     extra: Dict = field(default_factory=dict)
 
 
@@ -197,10 +199,74 @@ def _site_name(url: str) -> str:
     return host.removeprefix("www.")
 
 
+# ── PDF fetching ─────────────────────────────────────────────────────────────
+
+def _is_pdf_url(url: str) -> bool:
+    """Heuristic: URL path ends with .pdf (ignoring query params)."""
+    path = urlparse(url).path.lower()
+    return path.endswith(".pdf")
+
+
+def _pdf_title_from_text(md_text: str, fallback: str) -> str:
+    """Extract the first markdown heading, or fall back to filename."""
+    for line in md_text.split("\n"):
+        stripped = line.strip()
+        # Match any heading level: #, ##, ###
+        if re.match(r"^#{1,3}\s", stripped):
+            title = stripped.lstrip("#").strip().strip("*")
+            if title:
+                return title
+    return fallback
+
+
+def fetch_pdf(file_path: str, filename: str = "") -> FetchedContent:
+    """Extract markdown from a local PDF file."""
+    import pymupdf4llm
+
+    path = Path(file_path)
+    fallback_name = filename or path.stem
+
+    md_text = pymupdf4llm.to_markdown(str(path))
+    title = _pdf_title_from_text(md_text, fallback_name)
+
+    return FetchedContent(
+        url="",
+        title=title,
+        text=md_text,
+        site_name="PDF",
+        content_type="pdf",
+        extra={"filename": filename or path.name},
+    )
+
+
+def fetch_pdf_url(url: str) -> FetchedContent:
+    """Download a PDF from a URL and extract its content."""
+    resp = requests.get(url, headers=HEADERS, timeout=30, stream=True)
+    resp.raise_for_status()
+
+    # Derive filename from URL path
+    url_path = unquote(urlparse(url).path)
+    filename = Path(url_path).name or "document.pdf"
+
+    with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp:
+        for chunk in resp.iter_content(chunk_size=65536):
+            tmp.write(chunk)
+        tmp_path = tmp.name
+
+    try:
+        content = fetch_pdf(tmp_path, filename)
+        content.url = url
+        return content
+    finally:
+        Path(tmp_path).unlink(missing_ok=True)
+
+
 # ── Public entry point ────────────────────────────────────────────────────────
 
 def fetch(url: str) -> FetchedContent:
     url = url.strip()
     if is_tweet_url(url):
         return fetch_tweet(url)
+    if _is_pdf_url(url):
+        return fetch_pdf_url(url)
     return fetch_article(url)

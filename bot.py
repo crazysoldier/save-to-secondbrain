@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
+import tempfile
 from pathlib import Path
 
 from telegram import Update
@@ -65,6 +66,7 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "*Just send a URL* and I'll:\n"
         "• Extract the article text\n"
         "• For x.com / twitter.com links: fetch via fxtwitter\n"
+        "• PDF links or file attachments: extract full text\n"
         "• Save a clean .md file to your vault",
         parse_mode="Markdown",
     )
@@ -120,6 +122,72 @@ async def _process_url(update: Update, url: str) -> None:
     logger.info("Saved %s → %s", url, saved_path)
 
 
+# ── Document handler ─────────────────────────────────────────────────────────
+
+async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle PDF (and other document) file attachments."""
+    if not _is_allowed(update):
+        await update.message.reply_text("⛔ Not authorised.")
+        return
+
+    doc = update.message.document
+    if not doc:
+        return
+
+    filename = doc.file_name or "document"
+    status_msg = await update.message.reply_text(
+        f"⏳ Processing `{filename}` …", parse_mode="Markdown"
+    )
+
+    # Download file to a temp location
+    try:
+        tg_file = await context.bot.get_file(doc.file_id)
+        suffix = Path(filename).suffix or ".pdf"
+        tmp = tempfile.NamedTemporaryFile(suffix=suffix, delete=False)
+        tmp.close()
+        await tg_file.download_to_drive(tmp.name)
+    except Exception as exc:
+        logger.exception("Download failed for %s", filename)
+        await status_msg.edit_text(
+            f"❌ Could not download file:\n`{exc}`", parse_mode="Markdown"
+        )
+        return
+
+    try:
+        content = await asyncio.to_thread(fetcher.fetch_pdf, tmp.name, filename)
+    except Exception as exc:
+        logger.exception("PDF extraction failed for %s", filename)
+        await status_msg.edit_text(
+            f"❌ Could not extract PDF:\n`{exc}`", parse_mode="Markdown"
+        )
+        return
+    finally:
+        Path(tmp.name).unlink(missing_ok=True)
+
+    try:
+        saved_path = formatter.save(
+            content,
+            vault_path=config.VAULT_PATH,
+            folder_name=config.SAVE_FOLDER,
+            tags=config.DEFAULT_TAGS,
+        )
+    except Exception as exc:
+        logger.exception("Save failed for %s", filename)
+        await status_msg.edit_text(
+            f"❌ Could not save note:\n`{exc}`", parse_mode="Markdown"
+        )
+        return
+
+    rel = saved_path.relative_to(config.VAULT_PATH)
+    await status_msg.edit_text(
+        f"📑 Saved!\n\n"
+        f"*{content.title}*\n"
+        f"`{rel}`",
+        parse_mode="Markdown",
+    )
+    logger.info("Saved PDF %s → %s", filename, saved_path)
+
+
 # ── Entry point ───────────────────────────────────────────────────────────────
 
 async def on_error(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -143,6 +211,7 @@ def main() -> None:
     app.add_error_handler(on_error)
     app.add_handler(CommandHandler("start", cmd_start))
     app.add_handler(CommandHandler("help", cmd_help))
+    app.add_handler(MessageHandler(filters.Document.PDF, handle_document))
     app.add_handler(MessageHandler(filters.TEXT | filters.CAPTION, handle_message))
 
     app.run_polling(drop_pending_updates=True)
