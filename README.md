@@ -94,48 +94,17 @@ pkill -f "python bot.py"
 
 ### Persistent background — survives reboots (macOS launchd)
 
-This is the recommended way to run the bot permanently.
-
-**1. Create the plist** — replace both paths with your actual project path:
+This is the recommended way to run the bot permanently. A helper script handles everything:
 
 ```bash
-mkdir -p ~/Library/LaunchAgents
+# Install & start (auto-starts on login, restarts on crash)
+./install-service.sh
 
-cat > ~/Library/LaunchAgents/com.secondbrain.bot.plist << 'EOF'
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
-  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-  <key>Label</key>
-  <string>com.secondbrain.bot</string>
-  <key>ProgramArguments</key>
-  <array>
-    <string>/Users/YOUR_USERNAME/Projects/save-to-secondbrain/.venv/bin/python</string>
-    <string>/Users/YOUR_USERNAME/Projects/save-to-secondbrain/bot.py</string>
-  </array>
-  <key>WorkingDirectory</key>
-  <string>/Users/YOUR_USERNAME/Projects/save-to-secondbrain</string>
-  <key>StandardOutPath</key>
-  <string>/Users/YOUR_USERNAME/Projects/save-to-secondbrain/bot.log</string>
-  <key>StandardErrorPath</key>
-  <string>/Users/YOUR_USERNAME/Projects/save-to-secondbrain/bot.log</string>
-  <key>RunAtLoad</key>
-  <true/>
-  <key>KeepAlive</key>
-  <true/>
-</dict>
-</plist>
-EOF
+# Uninstall (stop & remove from autostart)
+./install-service.sh uninstall
 ```
 
-**2. Load it** (starts the bot immediately and on every login):
-
-```bash
-launchctl load ~/Library/LaunchAgents/com.secondbrain.bot.plist
-```
-
-**Managing the service:**
+**Managing the service manually:**
 
 ```bash
 # Check status
@@ -148,7 +117,7 @@ launchctl unload ~/Library/LaunchAgents/com.secondbrain.bot.plist
 launchctl load ~/Library/LaunchAgents/com.secondbrain.bot.plist
 
 # View logs
-tail -f ~/Projects/save-to-secondbrain/bot.log
+tail -f bot.log
 ```
 
 ## Note format
@@ -188,3 +157,4 @@ Full article text with ## section headings...
 | `formatter.py` | Builds Obsidian markdown from fetched content |
 | `login.py` | Extracts X.com cookies from your real browser |
 | `config.py` | Loads settings from `.env` |
+| `install-service.sh` | Installs/uninstalls macOS launchd autostart |
