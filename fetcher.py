@@ -53,6 +53,9 @@ _TWITTER_RE = re.compile(
     r"https?://(?:www\.)?(twitter\.com|x\.com)/(\w+)/status/(\d+)",
     re.IGNORECASE,
 )
+_X_ARTICLE_RE = re.compile(
+    r"https?://(?:www\.)?(?:twitter\.com|x\.com)/i/article/(\d+)", re.IGNORECASE
+)
 
 _FXEMBED_API = "https://api.fxtwitter.com/2/status/{tweet_id}"
 _FXEMBED_WEB = "https://fxtwitter.com/{username}/status/{tweet_id}"
@@ -102,7 +105,7 @@ def fetch_tweet(url: str) -> FetchedContent:
     x_article_url = ""
     browser_fetched = False
 
-    if not text and article:
+    if article:
         title = article.get("title", "") or f"@{author_handle} article"
         x_article_url = (
             f"https://x.com/i/article/{article['id']}" if article.get("id") else ""
@@ -428,8 +431,29 @@ def fetch_pdf_url(url: str) -> FetchedContent:
 
 # ── Public entry point ────────────────────────────────────────────────────────
 
+def fetch_x_article_url(url: str) -> FetchedContent:
+    """A bare x.com/i/article/<id> link: no tweet to look up, go straight to the browser."""
+    if not _browser.is_logged_in():
+        raise RuntimeError("X Articles need a login — run `python login.py`")
+    text = _browser.fetch_x_article(url) or ""
+    if not text.strip():
+        raise RuntimeError("X returned no article text — the session may have expired, run `python login.py`")
+    first = next((l.lstrip("#").strip() for l in text.splitlines() if l.strip()), "")
+    title = f"X Article: {first[:60]}{'…' if len(first) > 60 else ''}"
+    return FetchedContent(
+        url=url,
+        title=title,
+        text=text,
+        site_name="X / Twitter",
+        content_type="tweet",
+        extra={"original_url": url, "x_article_url": url, "browser_fetched": True},
+    )
+
+
 def fetch(url: str) -> FetchedContent:
     url = url.strip()
+    if _X_ARTICLE_RE.match(url):
+        return fetch_x_article_url(url)
     if is_tweet_url(url):
         return fetch_tweet(url)
     if _is_pdf_url(url):

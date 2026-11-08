@@ -12,7 +12,10 @@ import asyncio
 import logging
 import re
 import tempfile
+import time
+from datetime import date
 from pathlib import Path
+from typing import Optional
 
 from telegram import Update
 from telegram.ext import (
@@ -24,6 +27,7 @@ from telegram.ext import (
 )
 
 import analyzer
+import browser
 import config
 import fetcher
 import formatter
@@ -58,6 +62,7 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "Fetch tweets & X Articles (with browser session)",
         "Convert PDFs (Marker or pymupdf4llm)",
         "AI summary + analysis via Claude",
+        "Your comment next to a link is saved and steers the analysis",
         "Wiki integration (_Meta/log + index)",
     ]
     feature_list = "\n".join(f"  • {f}" for f in features)
@@ -82,7 +87,9 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "• PDF links or file attachments: convert with Marker\n"
         "• Generate AI summary + analysis\n"
         "• Save a clean .md file to your vault\n"
-        "• Download images for offline access",
+        "• Download images for offline access\n\n"
+        "Add a comment next to the link (or as a PDF caption): it's saved "
+        "under *My note* and the analysis answers it.",
         parse_mode="Markdown",
     )
 
@@ -99,11 +106,14 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         await update.message.reply_text("Send me a URL and I'll save it.")
         return
 
+    # Whatever else was typed alongside the link(s) is Max's own note.
+    comment = " ".join(URL_RE.sub("", text).split()) or None
+
     for url in urls:
-        await _process_url(update, url)
+        await _process_url(update, url, comment)
 
 
-async def _process_url(update: Update, url: str) -> None:
+async def _process_url(update: Update, url: str, comment: Optional[str] = None) -> None:
     status_msg = await update.message.reply_text(
         f"⏳ Fetching `{url}` …", parse_mode="Markdown"
     )
@@ -124,7 +134,7 @@ async def _process_url(update: Update, url: str) -> None:
     )
     try:
         ai_result = await asyncio.to_thread(
-            analyzer.analyze, content.title, content.text, content.content_type
+            analyzer.analyze, content.title, content.text, content.content_type, comment
         )
     except Exception as exc:
         logger.warning("Analysis failed: %s — saving without analysis", exc)
@@ -145,6 +155,7 @@ async def _process_url(update: Update, url: str) -> None:
             folder_name=config.SAVE_FOLDER,
             tags=all_tags,
             analysis=ai_result,
+            comment=comment,
         )
     except Exception as exc:
         logger.exception("Save failed for %s", url)
@@ -194,6 +205,7 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         return
 
     filename = doc.file_name or "document"
+    comment = (update.message.caption or "").strip() or None
     status_msg = await update.message.reply_text(
         f"⏳ Processing `{filename}` …", parse_mode="Markdown"
     )
@@ -242,7 +254,7 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     )
     try:
         ai_result = await asyncio.to_thread(
-            analyzer.analyze, content.title, content.text, content.content_type
+            analyzer.analyze, content.title, content.text, content.content_type, comment
         )
     except Exception as exc:
         logger.warning("Analysis failed: %s", exc)
@@ -263,6 +275,7 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             folder_name=config.SAVE_FOLDER,
             tags=all_tags,
             analysis=ai_result,
+            comment=comment,
         )
     except Exception as exc:
         logger.exception("Save failed for %s", filename)
@@ -296,6 +309,37 @@ async def on_error(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
     logger.error("Unhandled exception", exc_info=context.error)
 
 
+X_WARN_DAYS = 5
+X_CHECK_EVERY_S = 12 * 3600
+
+
+async def _watch_x_session(app: Application) -> None:
+    """Warn on Telegram, at most once a day, when the X login is about to expire."""
+    last_warned = None
+    while True:
+        expiry = browser.x_session_expiry()
+        days_left = (expiry - time.time()) / 86400 if expiry else None
+        if (days_left is None or days_left <= X_WARN_DAYS) and last_warned != date.today():
+            if days_left is None:
+                when = "is missing"
+            elif days_left <= 0:
+                when = "has expired"
+            else:
+                when = f"expires in {days_left:.0f} day{'s' if round(days_left) != 1 else ''} ({date.fromtimestamp(expiry).isoformat()})"
+            try:
+                await app.bot.send_message(
+                    config.ALLOWED_USER_ID,
+                    f"⚠️ The X login for saving X Articles {when}.\n\n"
+                    "Log in to x.com in Brave on the Mac mini, then run "
+                    "`python login.py` in save-to-secondbrain.",
+                    parse_mode="Markdown",
+                )
+                last_warned = date.today()
+            except Exception:
+                logger.exception("Could not send X session warning")
+        await asyncio.sleep(X_CHECK_EVERY_S)
+
+
 async def post_init(app: Application) -> None:
     me = await app.bot.get_me()
     logger.info("✅ Logged in as @%s (id=%s)", me.username, me.id)
@@ -303,6 +347,10 @@ async def post_init(app: Application) -> None:
     logger.info("   Vault            : %s/%s", config.VAULT_PATH, config.SAVE_FOLDER)
     logger.info("   Marker           : %s", config.MARKER_PATH or "not configured (using pymupdf4llm)")
     logger.info("   Claude API       : %s", "configured" if config.ANTHROPIC_API_KEY else "not configured")
+    expiry = browser.x_session_expiry()
+    logger.info("   X session        : %s", date.fromtimestamp(expiry).isoformat() if expiry else "none")
+    if config.ALLOWED_USER_ID:
+        asyncio.get_running_loop().create_task(_watch_x_session(app))
 
 
 def main() -> None:

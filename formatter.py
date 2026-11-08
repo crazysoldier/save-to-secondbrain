@@ -46,6 +46,7 @@ def build_markdown(
     content: FetchedContent,
     tags: List[str],
     analysis: Optional[Analysis] = None,
+    comment: Optional[str] = None,
 ) -> str:
     today = date.today().isoformat()
 
@@ -108,6 +109,13 @@ def build_markdown(
 
     if content.description:
         lines.append(f"*{content.description}*")
+        lines.append("")
+
+    # ── Max's own note, sent alongside the link ──────────────────────────────
+    if comment:
+        lines.append("## My note")
+        lines.append("")
+        lines.append(comment)
         lines.append("")
 
     # ── Summary + Analysis (AI-generated) ────────────────────────────────────
@@ -189,6 +197,7 @@ def save(
     folder_name: str,
     tags: List[str],
     analysis: Optional[Analysis] = None,
+    comment: Optional[str] = None,
 ) -> Path:
     save_dir = vault_path / folder_name
     save_dir.mkdir(parents=True, exist_ok=True)
@@ -197,7 +206,7 @@ def save(
     stem = f"{today} - {_slugify(content.title)}"
     filepath = _unique_path(save_dir, stem)
 
-    md = build_markdown(content, tags, analysis)
+    md = build_markdown(content, tags, analysis, comment)
 
     # Download remote images to vault attachments folder and rewrite paths
     md = download_images(
