@@ -17,6 +17,7 @@ import json
 import logging
 import re
 from pathlib import Path
+from typing import Optional
 
 from markdownify import markdownify as md
 
@@ -40,6 +41,17 @@ _CONTENT_SELECTORS = [
 
 def is_logged_in() -> bool:
     return COOKIES_FILE.exists() and COOKIES_FILE.stat().st_size > 10
+
+
+def x_session_expiry() -> Optional[float]:
+    """Unix time the saved X auth_token expires, or None if there is none."""
+    if not is_logged_in():
+        return None
+    try:
+        cookies = json.loads(COOKIES_FILE.read_text())
+    except (OSError, ValueError):
+        return None
+    return next((float(c["expires"]) for c in cookies if c.get("name") == "auth_token"), None)
 
 
 def _html_to_markdown(html: str) -> str:

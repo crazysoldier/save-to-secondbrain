@@ -12,6 +12,8 @@ import asyncio
 import logging
 import re
 import tempfile
+import time
+from datetime import date
 from pathlib import Path
 from typing import Optional
 
@@ -25,6 +27,7 @@ from telegram.ext import (
 )
 
 import analyzer
+import browser
 import config
 import fetcher
 import formatter
@@ -306,6 +309,37 @@ async def on_error(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
     logger.error("Unhandled exception", exc_info=context.error)
 
 
+X_WARN_DAYS = 5
+X_CHECK_EVERY_S = 12 * 3600
+
+
+async def _watch_x_session(app: Application) -> None:
+    """Warn on Telegram, at most once a day, when the X login is about to expire."""
+    last_warned = None
+    while True:
+        expiry = browser.x_session_expiry()
+        days_left = (expiry - time.time()) / 86400 if expiry else None
+        if (days_left is None or days_left <= X_WARN_DAYS) and last_warned != date.today():
+            if days_left is None:
+                when = "is missing"
+            elif days_left <= 0:
+                when = "has expired"
+            else:
+                when = f"expires in {days_left:.0f} day{'s' if round(days_left) != 1 else ''} ({date.fromtimestamp(expiry).isoformat()})"
+            try:
+                await app.bot.send_message(
+                    config.ALLOWED_USER_ID,
+                    f"⚠️ The X login for saving X Articles {when}.\n\n"
+                    "Log in to x.com in Brave on the Mac mini, then run "
+                    "`python login.py` in save-to-secondbrain.",
+                    parse_mode="Markdown",
+                )
+                last_warned = date.today()
+            except Exception:
+                logger.exception("Could not send X session warning")
+        await asyncio.sleep(X_CHECK_EVERY_S)
+
+
 async def post_init(app: Application) -> None:
     me = await app.bot.get_me()
     logger.info("✅ Logged in as @%s (id=%s)", me.username, me.id)
@@ -313,6 +347,10 @@ async def post_init(app: Application) -> None:
     logger.info("   Vault            : %s/%s", config.VAULT_PATH, config.SAVE_FOLDER)
     logger.info("   Marker           : %s", config.MARKER_PATH or "not configured (using pymupdf4llm)")
     logger.info("   Claude API       : %s", "configured" if config.ANTHROPIC_API_KEY else "not configured")
+    expiry = browser.x_session_expiry()
+    logger.info("   X session        : %s", date.fromtimestamp(expiry).isoformat() if expiry else "none")
+    if config.ALLOWED_USER_ID:
+        asyncio.get_running_loop().create_task(_watch_x_session(app))
 
 
 def main() -> None:
