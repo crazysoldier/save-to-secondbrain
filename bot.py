@@ -33,6 +33,8 @@ logging.basicConfig(
     level=logging.INFO,
 )
 logger = logging.getLogger(__name__)
+# httpx logs every getUpdates poll at INFO, including the bot token in the URL.
+logging.getLogger("httpx").setLevel(logging.WARNING)
 
 URL_RE = re.compile(r"https?://\S+", re.IGNORECASE)
 

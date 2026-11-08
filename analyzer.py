@@ -86,12 +86,19 @@ def analyze(title: str, text: str, content_type: str = "article") -> Optional[An
     try:
         client = anthropic.Anthropic(api_key=config.ANTHROPIC_API_KEY)
         response = client.messages.create(
-            model="claude-sonnet-4-20250514",
-            max_tokens=500,
+            model="claude-sonnet-5-5",
+            max_tokens=4000,
+            output_config={"effort": "low"},
             system=_SYSTEM_PROMPT,
             messages=[{"role": "user", "content": user_msg}],
+            # On a safety decline, let the API retry on a fallback model.
+            extra_headers={"anthropic-beta": "server-side-fallback-2026-07-01"},
+            extra_body={"fallbacks": "default"},
         )
-        result_text = response.content[0].text
+        if response.stop_reason == "refusal":
+            logger.warning("Claude declined to analyze %r", title)
+            return None
+        result_text = next(b.text for b in response.content if b.type == "text")
         return _parse_response(result_text)
     except Exception as e:
         logger.error("Claude API call failed: %s", e)
