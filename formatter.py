@@ -1,5 +1,8 @@
 """
 Convert FetchedContent into an Obsidian-compatible markdown file and save it.
+
+Enhanced with AI-generated summary + analysis sections (matching the
+OpenClaw second-brain-topic skill's "minimum content standard").
 """
 
 from __future__ import annotations
@@ -7,9 +10,11 @@ from __future__ import annotations
 import re
 from datetime import date
 from pathlib import Path
-from typing import List
+from typing import List, Optional
 
+from analyzer import Analysis
 from fetcher import FetchedContent
+from images import download_images
 
 
 def _slugify(text: str, max_len: int = 80) -> str:
@@ -37,11 +42,22 @@ def _yaml_str(value: str) -> str:
     return value
 
 
-def build_markdown(content: FetchedContent, tags: List[str]) -> str:
+def build_markdown(
+    content: FetchedContent,
+    tags: List[str],
+    analysis: Optional[Analysis] = None,
+) -> str:
     today = date.today().isoformat()
 
+    # Merge AI-suggested tags with default tags (deduplicated)
+    all_tags = list(tags)
+    if analysis and analysis.tags:
+        for t in analysis.tags:
+            if t not in all_tags:
+                all_tags.append(t)
+
     # ── Frontmatter ──────────────────────────────────────────────────────────
-    tag_list = ", ".join(f'"{t}"' for t in tags)
+    tag_list = ", ".join(f'"{t}"' for t in all_tags)
     lines: List[str] = ["---"]
     lines.append(f"title: {_yaml_str(content.title)}")
     lines.append(f"url: {content.url}")
@@ -52,6 +68,14 @@ def build_markdown(content: FetchedContent, tags: List[str]) -> str:
         lines.append(f"source: {_yaml_str(content.site_name)}")
     lines.append(f"type: {content.content_type}")
     lines.append(f"tags: [{tag_list}]")
+
+    # Extra metadata
+    converter = content.extra.get("converter")
+    if converter:
+        lines.append(f"converter: {converter}")
+    if content.extra.get("used_playwright"):
+        lines.append("extraction: playwright")
+
     lines.append("---")
     lines.append("")
 
@@ -59,9 +83,6 @@ def build_markdown(content: FetchedContent, tags: List[str]) -> str:
 
     if content.content_type == "tweet":
         media = content.extra.get("media_urls", [])
-        x_article_url = content.extra.get("x_article_url", "")
-
-        # Media before the title
         for mu in media:
             lines.append(f"![]({mu})")
         if media:
@@ -70,11 +91,45 @@ def build_markdown(content: FetchedContent, tags: List[str]) -> str:
     lines.append(f"# {content.title}")
     lines.append("")
 
+    # Source link (matching OpenClaw skill format)
+    if content.url:
+        lines.append(f"[Source]({content.url})")
+        lines.append("")
+
+    # Author + date line
+    meta_parts = []
+    if content.author:
+        meta_parts.append(f"**Author:** {content.author}")
+    if content.extra.get("created_at"):
+        meta_parts.append(f"**Published:** {content.extra['created_at']}")
+    if meta_parts:
+        lines.append(" · ".join(meta_parts))
+        lines.append("")
+
     if content.description:
         lines.append(f"*{content.description}*")
         lines.append("")
 
+    # ── Summary + Analysis (AI-generated) ────────────────────────────────────
+    if analysis:
+        if analysis.summary:
+            lines.append("## Summary")
+            lines.append("")
+            lines.append(analysis.summary)
+            lines.append("")
+        if analysis.analysis:
+            lines.append("## Analysis")
+            lines.append("")
+            lines.append(analysis.analysis)
+            lines.append("")
+
+    lines.append("---")
+    lines.append("")
+
+    # ── Full content ─────────────────────────────────────────────────────────
+
     if content.content_type == "tweet":
+        x_article_url = content.extra.get("x_article_url", "")
         if x_article_url:
             browser_fetched = content.extra.get("browser_fetched", False)
             if browser_fetched:
@@ -82,14 +137,15 @@ def build_markdown(content: FetchedContent, tags: List[str]) -> str:
                     lines.append(content.text)
                     lines.append("")
             else:
-                # Preview only — no browser session available
                 lines.append(f"> [!NOTE] X Article — preview only")
                 lines.append(f"> [Read full article on X]({x_article_url})")
                 lines.append("")
                 if content.text:
                     for tl in content.text.splitlines():
                         lines.append(f"> {tl}" if tl else ">")
-                    lines.append("> *(preview — run `python login.py` to enable full fetch)*")
+                    lines.append(
+                        "> *(preview — run `python login.py` to enable full fetch)*"
+                    )
                     lines.append("")
         else:
             # Regular tweet: quote-block the text
@@ -98,18 +154,18 @@ def build_markdown(content: FetchedContent, tags: List[str]) -> str:
                 lines.append(f"> {tl}" if tl else ">")
             lines.append("")
 
-        if content.extra.get("created_at"):
-            lines.append(f"*Posted: {content.extra['created_at']}*")
-            lines.append("")
     elif content.content_type == "pdf":
-        # pymupdf4llm already outputs markdown — strip duplicate title if present
+        # For PDFs: embed original + show converted markdown
+        orig_filename = content.extra.get("filename", "")
+        if orig_filename:
+            lines.append(f"![[{orig_filename}]]")
+            lines.append("")
+
         body = content.text
         if body:
             body_lines = body.split("\n")
-            # Drop leading blank lines
             while body_lines and not body_lines[0].strip():
                 body_lines.pop(0)
-            # Drop first line if it matches the title heading
             if body_lines:
                 first_clean = body_lines[0].lstrip("#").strip()
                 if first_clean.lower() == content.title.lower():
@@ -119,7 +175,7 @@ def build_markdown(content: FetchedContent, tags: List[str]) -> str:
             lines.append("\n".join(body_lines))
             lines.append("")
     else:
-        # Article: plain text body
+        # Article: full text body
         if content.text:
             lines.append(content.text)
             lines.append("")
@@ -127,7 +183,13 @@ def build_markdown(content: FetchedContent, tags: List[str]) -> str:
     return "\n".join(lines)
 
 
-def save(content: FetchedContent, vault_path: Path, folder_name: str, tags: List[str]) -> Path:
+def save(
+    content: FetchedContent,
+    vault_path: Path,
+    folder_name: str,
+    tags: List[str],
+    analysis: Optional[Analysis] = None,
+) -> Path:
     save_dir = vault_path / folder_name
     save_dir.mkdir(parents=True, exist_ok=True)
 
@@ -135,6 +197,14 @@ def save(content: FetchedContent, vault_path: Path, folder_name: str, tags: List
     stem = f"{today} - {_slugify(content.title)}"
     filepath = _unique_path(save_dir, stem)
 
-    md = build_markdown(content, tags)
+    md = build_markdown(content, tags, analysis)
+
+    # Download remote images to vault attachments folder and rewrite paths
+    md = download_images(
+        md, vault_path,
+        attachments_folder="Personal/5 attachments",
+        source_url=content.url,
+    )
+
     filepath.write_text(md, encoding="utf-8")
     return filepath
