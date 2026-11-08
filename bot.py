@@ -13,6 +13,7 @@ import logging
 import re
 import tempfile
 from pathlib import Path
+from typing import Optional
 
 from telegram import Update
 from telegram.ext import (
@@ -58,6 +59,7 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "Fetch tweets & X Articles (with browser session)",
         "Convert PDFs (Marker or pymupdf4llm)",
         "AI summary + analysis via Claude",
+        "Your comment next to a link is saved and steers the analysis",
         "Wiki integration (_Meta/log + index)",
     ]
     feature_list = "\n".join(f"  • {f}" for f in features)
@@ -82,7 +84,9 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "• PDF links or file attachments: convert with Marker\n"
         "• Generate AI summary + analysis\n"
         "• Save a clean .md file to your vault\n"
-        "• Download images for offline access",
+        "• Download images for offline access\n\n"
+        "Add a comment next to the link (or as a PDF caption): it's saved "
+        "under *My note* and the analysis answers it.",
         parse_mode="Markdown",
     )
 
@@ -99,11 +103,14 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         await update.message.reply_text("Send me a URL and I'll save it.")
         return
 
+    # Whatever else was typed alongside the link(s) is Max's own note.
+    comment = " ".join(URL_RE.sub("", text).split()) or None
+
     for url in urls:
-        await _process_url(update, url)
+        await _process_url(update, url, comment)
 
 
-async def _process_url(update: Update, url: str) -> None:
+async def _process_url(update: Update, url: str, comment: Optional[str] = None) -> None:
     status_msg = await update.message.reply_text(
         f"⏳ Fetching `{url}` …", parse_mode="Markdown"
     )
@@ -124,7 +131,7 @@ async def _process_url(update: Update, url: str) -> None:
     )
     try:
         ai_result = await asyncio.to_thread(
-            analyzer.analyze, content.title, content.text, content.content_type
+            analyzer.analyze, content.title, content.text, content.content_type, comment
         )
     except Exception as exc:
         logger.warning("Analysis failed: %s — saving without analysis", exc)
@@ -145,6 +152,7 @@ async def _process_url(update: Update, url: str) -> None:
             folder_name=config.SAVE_FOLDER,
             tags=all_tags,
             analysis=ai_result,
+            comment=comment,
         )
     except Exception as exc:
         logger.exception("Save failed for %s", url)
@@ -194,6 +202,7 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         return
 
     filename = doc.file_name or "document"
+    comment = (update.message.caption or "").strip() or None
     status_msg = await update.message.reply_text(
         f"⏳ Processing `{filename}` …", parse_mode="Markdown"
     )
@@ -242,7 +251,7 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     )
     try:
         ai_result = await asyncio.to_thread(
-            analyzer.analyze, content.title, content.text, content.content_type
+            analyzer.analyze, content.title, content.text, content.content_type, comment
         )
     except Exception as exc:
         logger.warning("Analysis failed: %s", exc)
@@ -263,6 +272,7 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             folder_name=config.SAVE_FOLDER,
             tags=all_tags,
             analysis=ai_result,
+            comment=comment,
         )
     except Exception as exc:
         logger.exception("Save failed for %s", filename)

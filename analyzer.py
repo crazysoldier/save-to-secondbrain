@@ -31,6 +31,9 @@ You are a knowledge management assistant. Given an article or document, produce:
 2. **Analysis** (2-4 sentences): Why does it matter? How does it connect to broader themes? What's the strategic implication?
 3. **Tags** (3-6 tags): Lowercase, no hashes, comma-separated. Focus on topics, domains, and key entities.
 
+The reader may add a note saying why they saved it or what they want to know. Keep the summary
+about the document itself; aim the analysis at the reader's note and answer any question in it.
+
 Respond in this exact format:
 SUMMARY: <your summary>
 ANALYSIS: <your analysis>
@@ -60,7 +63,9 @@ def _parse_response(text: str) -> Analysis:
     return Analysis(summary=summary, analysis=analysis, tags=tags)
 
 
-def analyze(title: str, text: str, content_type: str = "article") -> Optional[Analysis]:
+def analyze(
+    title: str, text: str, content_type: str = "article", comment: Optional[str] = None
+) -> Optional[Analysis]:
     """
     Generate summary + analysis for a piece of content using Claude.
     Returns None if API key is not configured or call fails.
@@ -81,7 +86,10 @@ def analyze(title: str, text: str, content_type: str = "article") -> Optional[An
     if len(text) > max_chars:
         truncated += "\n\n[... truncated ...]"
 
-    user_msg = f"Title: {title}\nType: {content_type}\n\n---\n\n{truncated}"
+    user_msg = f"Title: {title}\nType: {content_type}\n"
+    if comment:
+        user_msg += f"Reader's note: {comment}\n"
+    user_msg += f"\n---\n\n{truncated}"
 
     try:
         client = anthropic.Anthropic(api_key=config.ANTHROPIC_API_KEY)

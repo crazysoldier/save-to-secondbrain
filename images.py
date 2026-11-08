@@ -106,8 +106,10 @@ def download_images(
         if url.startswith("[["):
             return match.group(0)
 
-        # Resolve relative URLs
-        if url.startswith("/") and _base_url:
+        # Resolve relative URLs ("//host/x" is protocol-relative, e.g. Wikipedia)
+        if url.startswith("//"):
+            url = f"{urlparse(source_url).scheme or 'https'}:{url}"
+        elif url.startswith("/") and _base_url:
             url = _base_url + url
         elif not url.startswith("http"):
             # Relative path without leading slash — skip, can't resolve
